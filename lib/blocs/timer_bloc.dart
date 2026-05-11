@@ -2,9 +2,7 @@ import 'dart:async';
 import 'package:bloc/bloc.dart';
 import 'package:equatable/equatable.dart';
 
-// ==========================================
-// 1. EVENTS (The buttons the user clicks)
-// ==========================================
+// Buttons
 abstract class TimerEvent extends Equatable {
   const TimerEvent();
 
@@ -24,9 +22,7 @@ class TimerTicked extends TimerEvent {
   List<Object> get props => [duration];
 }
 
-// ==========================================
-// 2. STATES (What the UI shows right now)
-// ==========================================
+// States
 abstract class TimerState extends Equatable {
   final int duration; // Seconds remaining
   const TimerState(this.duration);
@@ -48,18 +44,14 @@ class TimerBreakInProgress extends TimerState {
   const TimerBreakInProgress(super.duration); 
 }
 
-// ==========================================
-// 3. THE BLOC (The Engine)
-// ==========================================
+// BLOC
 class TimerBloc extends Bloc<TimerEvent, TimerState> {
-  // 25 minutes = 1500 seconds | 5 minutes = 300 seconds
   static const int focusDuration = 1500; 
   static const int breakDuration = 300;  
   
   StreamSubscription<int>? _tickerSubscription;
 
   TimerBloc() : super(const TimerInitial(focusDuration)) {
-    // When an Event comes in, trigger the right function
     on<StartFocusTimer>(_onStartFocus);
     on<PauseTimer>(_onPause);
     on<ResumeTimer>(_onResume);
