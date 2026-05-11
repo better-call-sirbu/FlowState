@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../blocs/timer_bloc.dart';
+import 'package:hive/hive.dart';
 
 class StudyRoomScreen extends StatefulWidget {
   const StudyRoomScreen({super.key});
@@ -10,13 +11,21 @@ class StudyRoomScreen extends StatefulWidget {
 }
 
 class _StudyRoomScreenState extends State<StudyRoomScreen> {
-  final List<String> _tasks = [];
+  List<String> _tasks = [];
   final TextEditingController _taskController = TextEditingController();
+  final _taskBox = Hive.box('tasksBox');
+
+@override
+  void initState() {
+    super.initState();
+    _tasks = _taskBox.get('myTasks', defaultValue: <String>[])?.cast<String>() ?? [];
+  }
 
   void _addTask(String task) {
     if (task.trim().isNotEmpty) {
       setState(() {
         _tasks.add(task.trim());
+        _taskBox.put('myTasks', _tasks);
       });
       _taskController.clear();
     }
@@ -25,6 +34,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
   void _removeTask(int index) {
     setState(() {
       _tasks.removeAt(index);
+      _taskBox.put('myTasks', _tasks);
     });
   }
 
