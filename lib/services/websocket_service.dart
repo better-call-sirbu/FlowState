@@ -8,6 +8,8 @@ enum UserStatus { online, studying, onBreak }
 /// All message types supported by the FlowState WebSocket protocol.
 enum MessageType { timerStart, timerPause, timerReset, statusUpdate, connected }
 
+const String kWebSocketUrl = 'wss://flowstate-azq1.onrender.com';
+
 /// A parsed message received from the WebSocket server.
 class FlowStateMessage {
   final MessageType type;
