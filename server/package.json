@@ -1,0 +1,12 @@
+{
+  "name": "flowstate-websocket-server",
+  "version": "1.0.0",
+  "description": "WebSocket server for FlowState study room app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
