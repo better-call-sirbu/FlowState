@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'screens/room_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,9 +19,7 @@ class FlowStateApp extends StatelessWidget {
     return MaterialApp(
       title: 'FlowState',
       theme: ThemeData.dark(),
-      home: const Scaffold(
-        body: Center(child: Text('Firebase Linked Successfully!')),
-      ),
+      home: const StudyRoomScreen(),
     );
   }
 }
