@@ -17,7 +17,7 @@ console.log(`FlowState WebSocket server running on port ${PORT}`);
 //   sessionConfig: { sessionMinutes, splitMinutes, breakMinutes, numSplits },
 //   users: Map<user_id, UserEntry>,
 //   currentPhase: 'study' | 'break' | null,
-//   currentSplitIndex: number,      // 0-based, which study split we are on
+//   currentSplitIndex: number,
 //   phaseStartedAt: Date | null,
 //   phaseTimer: Timeout | null,
 // }
@@ -27,7 +27,9 @@ console.log(`FlowState WebSocket server running on port ${PORT}`);
 //   displayName: string,
 //   ws: WebSocket,
 //   isReady: boolean,
-//   studySecondsEarned: number,   // accumulated completed study splits
+//   studySecondsEarned: number,      // accumulated completed study splits
+//   personalBreakSeconds: number,    // total personal break time during study phases
+//   personalBreakStartedAt: Date | null, // when current personal break started (null if not on personal break)
 // }
 
 const rooms = new Map();
@@ -71,15 +73,13 @@ function getRoomSnapshot(room) {
     current_split_index: room.currentSplitIndex,
     phase_ends_at: room.phaseStartedAt
       ? new Date(
-          room.phaseStartedAt.getTime() +
-            getPhaseDurationMs(room) 
+          room.phaseStartedAt.getTime() + getPhaseDurationMs(room)
         ).toISOString()
       : null,
     users,
   };
 }
 
-// Returns the ms duration of the CURRENT phase
 function getPhaseDurationMs(room) {
   if (!room.sessionConfig) return 0;
   const { splitMinutes, breakMinutes } = room.sessionConfig;
@@ -88,12 +88,10 @@ function getPhaseDurationMs(room) {
   return 0;
 }
 
-// Derive numSplits from sessionMinutes / splitMinutes, clamped to at least 1
 function calcNumSplits(sessionMinutes, splitMinutes) {
   return Math.max(1, Math.floor(sessionMinutes / splitMinutes));
 }
 
-// Find which room a given ws belongs to. Returns { room, userId } or null.
 function findUserRoom(ws) {
   for (const [, room] of rooms) {
     for (const [uid, u] of room.users) {
@@ -101,6 +99,24 @@ function findUserRoom(ws) {
     }
   }
   return null;
+}
+
+// ─── Personal Break Helpers ───────────────────────────────────────────────────
+
+// Flush any in-progress personal break penalty into personalBreakSeconds.
+// Call this before reading the final penalty or before pausing the penalty timer.
+function flushPersonalBreak(user) {
+  if (user.personalBreakStartedAt) {
+    const elapsed = Math.floor((Date.now() - user.personalBreakStartedAt.getTime()) / 1000);
+    user.personalBreakSeconds += elapsed;
+    user.personalBreakStartedAt = null;
+  }
+}
+
+// Net study seconds for a user: earned minus personal break penalty.
+// Never goes below zero.
+function netStudySeconds(user) {
+  return Math.max(0, user.studySecondsEarned - user.personalBreakSeconds);
 }
 
 // ─── Session Timer Logic ──────────────────────────────────────────────────────
@@ -111,7 +127,28 @@ function startPhase(room) {
   const durationMs = getPhaseDurationMs(room);
   room.phaseStartedAt = new Date();
 
-  // Broadcast phase_change so clients can start their local countdown
+  if (room.currentPhase === "break") {
+    // Scheduled break started: pause personal break timers for anyone on personal break.
+    // We flush what they accumulated during the study phase so far, then stop the clock.
+    for (const [, u] of room.users) {
+      if (u.personalBreakStartedAt) {
+        flushPersonalBreak(u);
+        // Mark that they were on personal break when the scheduled break started,
+        // so we can resume their timer when study resumes.
+        u.personalBreakPausedForScheduledBreak = true;
+      }
+    }
+  } else if (room.currentPhase === "study") {
+    // Study phase resumed: restart personal break timer for anyone who was
+    // still on personal break when the scheduled break interrupted them.
+    for (const [, u] of room.users) {
+      if (u.personalBreakPausedForScheduledBreak) {
+        u.personalBreakStartedAt = new Date();
+        u.personalBreakPausedForScheduledBreak = false;
+      }
+    }
+  }
+
   broadcastToRoom(room.roomId, {
     type: "phase_change",
     phase: room.currentPhase,
@@ -128,24 +165,22 @@ function startPhase(room) {
 
 function onPhaseEnd(room) {
   if (room.currentPhase === "study") {
-    // Credit completed study split to all currently connected users
     const splitSeconds = room.sessionConfig.splitMinutes * 60;
     for (const [, u] of room.users) {
+      // Credit the full split, then flush any personal break penalty accumulated
+      // during this split so the penalty is locked in before the next phase.
       u.studySecondsEarned += splitSeconds;
+      flushPersonalBreak(u);
     }
 
-    const nextBreakIndex = room.currentSplitIndex; // breaks are 0-indexed same as split
     const isLastSplit = room.currentSplitIndex >= room.sessionConfig.numSplits - 1;
-
     if (isLastSplit) {
       endSession(room);
     } else {
-      // Transition to break
       room.currentPhase = "break";
       startPhase(room);
     }
   } else {
-    // Break ended → next study split
     room.currentSplitIndex += 1;
     room.currentPhase = "study";
     startPhase(room);
@@ -159,7 +194,9 @@ function endSession(room) {
 
   const studyTimePerUser = {};
   for (const [uid, u] of room.users) {
-    studyTimePerUser[uid] = u.studySecondsEarned;
+    // Flush any in-progress personal break before finalising
+    flushPersonalBreak(u);
+    studyTimePerUser[uid] = netStudySeconds(u);
   }
 
   broadcastToRoom(room.roomId, {
@@ -171,8 +208,6 @@ function endSession(room) {
   console.log(`Room ${room.roomId} session ended. Study times:`, studyTimePerUser);
 }
 
-// How many study seconds has the current user earned so far IN the live phase?
-// Only call this during an active study phase.
 function partialStudySecondsNow(room) {
   if (room.currentPhase !== "study" || !room.phaseStartedAt) return 0;
   return Math.floor((Date.now() - room.phaseStartedAt.getTime()) / 1000);
@@ -186,7 +221,6 @@ function handleCreateRoom(ws, msg) {
   if (!room_id || !host_id || !display_name || !session_config) {
     return sendToUser(ws, { type: "error", message: "create_room: missing fields." });
   }
-
   if (rooms.has(room_id)) {
     return sendToUser(ws, { type: "error", message: `Room ${room_id} already exists.` });
   }
@@ -209,13 +243,15 @@ function handleCreateRoom(ws, msg) {
   room.users.set(host_id, {
     displayName: display_name,
     ws,
-    isReady: true, // host is always "ready"
+    isReady: true,
     studySecondsEarned: 0,
+    personalBreakSeconds: 0,
+    personalBreakStartedAt: null,
+    personalBreakPausedForScheduledBreak: false,
   });
 
   rooms.set(room_id, room);
   console.log(`Room created: ${room_id} by ${display_name} (${host_id}). Splits: ${numSplits}`);
-
   sendToUser(ws, getRoomSnapshot(room));
 }
 
@@ -239,11 +275,12 @@ function handleJoinRoom(ws, msg) {
     ws,
     isReady: false,
     studySecondsEarned: 0,
+    personalBreakSeconds: 0,
+    personalBreakStartedAt: null,
+    personalBreakPausedForScheduledBreak: false,
   });
 
   console.log(`${display_name} joined room ${room_id}.`);
-
-  // Broadcast full snapshot to everyone so all tabs stay in sync
   broadcastToRoom(room_id, getRoomSnapshot(room));
 }
 
@@ -252,15 +289,12 @@ function handleSetReady(ws, msg) {
   const room = rooms.get(room_id);
 
   if (!room || room.state !== "waiting") return;
-  if (user_id === room.hostId) return; // host is always ready, can't toggle
+  if (user_id === room.hostId) return;
 
   const user = room.users.get(user_id);
   if (!user) return;
 
-  // Toggle ready state
   user.isReady = !user.isReady;
-
-  // Broadcast full snapshot so everyone's room presence table updates
   broadcastToRoom(room_id, getRoomSnapshot(room));
 }
 
@@ -293,6 +327,36 @@ function handleStartSession(ws, msg) {
   startPhase(room);
 }
 
+function handlePersonalBreakStart(ws, msg) {
+  const { room_id, user_id } = msg;
+  const room = rooms.get(room_id);
+  if (!room || room.state !== "active") return;
+
+  const user = room.users.get(user_id);
+  if (!user) return;
+
+  // Only start the penalty timer if we're in a study phase.
+  // During a scheduled break, personal pause has no cost.
+  if (room.currentPhase === "study" && !user.personalBreakStartedAt) {
+    user.personalBreakStartedAt = new Date();
+    console.log(`${user.displayName} started personal break in room ${room_id}.`);
+  }
+}
+
+function handlePersonalBreakEnd(ws, msg) {
+  const { room_id, user_id } = msg;
+  const room = rooms.get(room_id);
+  if (!room || room.state !== "active") return;
+
+  const user = room.users.get(user_id);
+  if (!user) return;
+
+  // Flush whatever penalty was accumulated and stop the timer.
+  flushPersonalBreak(user);
+  user.personalBreakPausedForScheduledBreak = false;
+  console.log(`${user.displayName} ended personal break. Total penalty: ${user.personalBreakSeconds}s`);
+}
+
 function handleLeaveRoom(ws, msg) {
   const { room_id, user_id } = msg;
   removeUserFromRoom(room_id, user_id, ws);
@@ -305,16 +369,21 @@ function removeUserFromRoom(roomId, userId, ws) {
   const user = room.users.get(userId);
   if (!user) return;
 
-  // Calculate partial study seconds if leaving mid-study-split
+  // Flush any in-progress personal break penalty
+  flushPersonalBreak(user);
+
+  // Add partial study seconds for the current split if leaving mid-study
   let finalStudySeconds = user.studySecondsEarned;
   if (room.state === "active" && room.currentPhase === "study") {
     finalStudySeconds += partialStudySecondsNow(room);
   }
 
-  room.users.delete(userId);
-  console.log(`${user.displayName} left room ${roomId}. Study seconds: ${finalStudySeconds}`);
+  // Subtract personal break penalty and clamp
+  finalStudySeconds = Math.max(0, finalStudySeconds - user.personalBreakSeconds);
 
-  // Notify everyone of the study seconds this user earned (for Firebase guy)
+  room.users.delete(userId);
+  console.log(`${user.displayName} left room ${roomId}. Net study seconds: ${finalStudySeconds}`);
+
   broadcastToRoom(roomId, {
     type: "user_left",
     room_id: roomId,
@@ -323,12 +392,10 @@ function removeUserFromRoom(roomId, userId, ws) {
     study_seconds_earned: finalStudySeconds,
   });
 
-  // Also broadcast updated snapshot so remaining users' presence tables sync
   if (room.users.size > 0) {
     broadcastToRoom(roomId, getRoomSnapshot(room));
   }
 
-  // Clean up empty rooms
   if (room.users.size === 0) {
     if (room.phaseTimer) clearTimeout(room.phaseTimer);
     rooms.delete(roomId);
@@ -336,7 +403,6 @@ function removeUserFromRoom(roomId, userId, ws) {
     return;
   }
 
-  // If host left and session is still waiting, assign a new host
   if (userId === room.hostId && room.state === "waiting") {
     const newHostId = room.users.keys().next().value;
     room.hostId = newHostId;
@@ -353,7 +419,10 @@ function removeUserFromRoom(roomId, userId, ws) {
 wss.on("connection", (ws) => {
   console.log(`New WebSocket connection. Total clients: ${wss.clients.size}`);
 
-  const allowedTypes = ["create_room", "join_room", "set_ready", "start_session", "leave_room"];
+  const allowedTypes = [
+    "create_room", "join_room", "set_ready", "start_session",
+    "leave_room", "personal_break_start", "personal_break_end",
+  ];
 
   ws.on("message", (data) => {
     let parsed;
@@ -372,16 +441,17 @@ wss.on("connection", (ws) => {
     }
 
     switch (parsed.type) {
-      case "create_room":    handleCreateRoom(ws, parsed);    break;
-      case "join_room":      handleJoinRoom(ws, parsed);      break;
-      case "set_ready":      handleSetReady(ws, parsed);      break;
-      case "start_session":  handleStartSession(ws, parsed);  break;
-      case "leave_room":     handleLeaveRoom(ws, parsed);     break;
+      case "create_room":          handleCreateRoom(ws, parsed);         break;
+      case "join_room":            handleJoinRoom(ws, parsed);           break;
+      case "set_ready":            handleSetReady(ws, parsed);           break;
+      case "start_session":        handleStartSession(ws, parsed);       break;
+      case "leave_room":           handleLeaveRoom(ws, parsed);          break;
+      case "personal_break_start": handlePersonalBreakStart(ws, parsed); break;
+      case "personal_break_end":   handlePersonalBreakEnd(ws, parsed);   break;
     }
   });
 
   ws.on("close", () => {
-    // Find which room this ws belonged to and clean up
     const found = findUserRoom(ws);
     if (found) {
       removeUserFromRoom(found.room.roomId, found.userId, ws);

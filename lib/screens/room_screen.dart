@@ -36,6 +36,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
   // Room state
   String _roomState = 'waiting'; // 'waiting' | 'active' | 'ended'
   bool _isReady = false;         // this member's own ready state
+  bool _isPausedByUser = false;  // user pressed pause → show as "On Break" locally
 
   late StreamSubscription<FlowStateMessage> _wsSub;
   late TimerBloc _timerBloc;
@@ -108,8 +109,14 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
       case MessageType.phaseChange:
         final phase = msg.payload['phase'] as String; // 'study' | 'break'
         setState(() {
-          for (final u in _users.values) {
-            u['phase'] = phase;
+          for (final entry in _users.entries) {
+            // If this is the local user and they manually paused,
+            // keep them on "On Break" regardless of the server phase.
+            if (entry.key == widget.userId && _isPausedByUser) {
+              entry.value['phase'] = 'break';
+            } else {
+              entry.value['phase'] = phase;
+            }
           }
         });
         break;
@@ -378,7 +385,27 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
         ),
         const SizedBox(height: 40),
         FloatingActionButton(
-          onPressed: () => isPaused ? _timerBloc.add(ResumeTimer()) : _timerBloc.add(PauseTimer()),
+          onPressed: () {
+            if (isPaused) {
+              _timerBloc.add(ResumeTimer());
+              widget.ws.personalBreakEnd(roomId: widget.roomId, userId: widget.userId);
+              setState(() {
+                _isPausedByUser = false;
+                if (_users.containsKey(widget.userId)) {
+                  _users[widget.userId]!['phase'] = 'study';
+                }
+              });
+            } else {
+              _timerBloc.add(PauseTimer());
+              widget.ws.personalBreakStart(roomId: widget.roomId, userId: widget.userId);
+              setState(() {
+                _isPausedByUser = true;
+                if (_users.containsKey(widget.userId)) {
+                  _users[widget.userId]!['phase'] = 'break';
+                }
+              });
+            }
+          },
           backgroundColor: isPaused ? Colors.greenAccent : Colors.white,
           child: Icon(isPaused ? Icons.play_arrow : Icons.pause, color: Colors.black, size: 32),
         ),
@@ -417,7 +444,40 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
   Widget build(BuildContext context) {
     return BlocProvider.value(
       value: _timerBloc,
-      child: Scaffold(
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) async {
+          if (didPop) return;
+          // Only warn if session is active
+          if (_roomState == 'active') {
+            final confirm = await showDialog<bool>(
+              context: context,
+              builder: (_) => AlertDialog(
+                title: const Text('Leave the room?'),
+                content: const Text(
+                  'The session is running. If you leave now you will not be able to rejoin.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Stay'),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: const Text('Leave', style: TextStyle(color: Colors.white)),
+                  ),
+                ],
+              ),
+            );
+            if (confirm == true && context.mounted) {
+              Navigator.of(context).pop();
+            }
+          } else {
+            Navigator.of(context).pop();
+          }
+        },
+        child: Scaffold(
         appBar: AppBar(
           title: Text('FlowState — Room #${widget.roomId}'),
           centerTitle: true,
@@ -502,6 +562,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

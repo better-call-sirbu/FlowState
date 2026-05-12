@@ -233,6 +233,33 @@ class WebSocketService {
     });
   }
 
+  /// User: signal that they have personally paused during a study phase.
+  /// The server will start counting this time as a penalty against their study seconds.
+  /// Has no effect during scheduled breaks (the server ignores it).
+  void personalBreakStart({
+    required String roomId,
+    required String userId,
+  }) {
+    _send({
+      'type': 'personal_break_start',
+      'room_id': roomId,
+      'user_id': userId,
+    });
+  }
+
+  /// User: signal that they have resumed from their personal pause.
+  /// The server will stop the penalty timer.
+  void personalBreakEnd({
+    required String roomId,
+    required String userId,
+  }) {
+    _send({
+      'type': 'personal_break_end',
+      'room_id': roomId,
+      'user_id': userId,
+    });
+  }
+
   // ─── Dispose ───────────────────────────────────────────────────────────────
 
   void dispose() {
