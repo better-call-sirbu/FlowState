@@ -6,9 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 enum UserStatus { online, studying, onBreak }
 
 /// All message types supported by the FlowState WebSocket protocol.
-enum MessageType { timerStart, timerPause, timerReset, statusUpdate, connected }
-
-const String kWebSocketUrl = 'wss://flowstate-azq1.onrender.com';
+enum MessageType { timerStart, timerPause, timerReset, statusUpdate, connected, roomSnapshot }
 
 /// A parsed message received from the WebSocket server.
 class FlowStateMessage {
@@ -25,6 +23,7 @@ class FlowStateMessage {
       'timer_reset': MessageType.timerReset,
       'status_update': MessageType.statusUpdate,
       'connected': MessageType.connected,
+      'room_snapshot': MessageType.roomSnapshot,
     };
 
     return FlowStateMessage(
