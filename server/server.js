@@ -8,7 +8,7 @@ const clients = new Map();
 
 console.log(`FlowState WebSocket server running on port ${PORT}`);
 
-// Build the full room snapshot (all users and their statuses)
+// Build the full room snapshot (all users, statuses, overtime, session config)
 function getRoomSnapshot() {
   const users = {};
   for (const [, user] of clients) {
@@ -16,6 +16,8 @@ function getRoomSnapshot() {
       users[user.userId] = {
         display_name: user.displayName,
         status: user.status,
+        overtime: user.overtime || null,
+        session_config: user.sessionConfig || null,
       };
     }
   }
@@ -54,27 +56,61 @@ wss.on("connection", (ws) => {
 
     console.log("Received:", parsed);
 
-    const allowedTypes = ["timer_start", "timer_pause", "timer_reset", "status_update"];
+    const allowedTypes = [
+      "timer_start", "timer_pause", "timer_reset",
+      "status_update", "session_config", "overtime",
+    ];
     if (!allowedTypes.includes(parsed.type)) {
       console.warn("Unknown message type:", parsed.type);
       return;
     }
 
     if (parsed.type === "status_update") {
-      // Update this client's stored info
+      // Update this client's stored info and clear any overtime
+      const current = clients.get(ws);
       clients.set(ws, {
+        ...current,
         userId: parsed.user_id,
         displayName: parsed.display_name,
         status: parsed.status,
+        overtime: null,
       });
 
-      // Broadcast the full updated room to everyone
-      broadcast({
-        type: "room_snapshot",
-        users: getRoomSnapshot(),
+      broadcast({ type: "room_snapshot", users: getRoomSnapshot() });
+
+    } else if (parsed.type === "overtime") {
+      // Update overtime state for this client
+      const current = clients.get(ws);
+      clients.set(ws, {
+        ...current,
+        userId: parsed.user_id,
+        displayName: parsed.display_name,
+        overtime: {
+          type: parsed.overtime_type,
+          seconds_over: parsed.seconds_over,
+        },
       });
+
+      broadcast({ type: "room_snapshot", users: getRoomSnapshot() });
+
+    } else if (parsed.type === "session_config") {
+      // Store session config and broadcast to everyone
+      const current = clients.get(ws);
+      clients.set(ws, {
+        ...current,
+        userId: parsed.user_id,
+        displayName: parsed.display_name,
+        sessionConfig: {
+          total_minutes: parsed.total_minutes,
+          split_minutes: parsed.split_minutes,
+          break_minutes: parsed.break_minutes,
+        },
+      });
+
+      broadcast({ type: "room_snapshot", users: getRoomSnapshot() });
+
     } else {
-      // For timer events, broadcast to everyone except sender
+      // Timer events — broadcast to everyone except sender
       const outgoing = JSON.stringify(parsed);
       for (const [client] of clients) {
         if (client !== ws && client.readyState === 1) {
