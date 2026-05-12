@@ -43,6 +43,7 @@ dependencies:
   equatable: ^2.0.8
   path_provider: ^2.1.5
   bloc: ^9.2.0
+  cloud_firestore: ^6.4.0
 
 dev_dependencies:
   flutter_test:

@@ -26,8 +26,8 @@ class CreateRoomDialog extends StatefulWidget {
 
 class _CreateRoomDialogState extends State<CreateRoomDialog> {
   final _sessionMinCtrl = TextEditingController(text: '120');
-  final _splitMinCtrl   = TextEditingController(text: '25');
-  final _breakMinCtrl   = TextEditingController(text: '5');
+  final _splitMinCtrl = TextEditingController(text: '25');
+  final _breakMinCtrl = TextEditingController(text: '5');
 
   @override
   void dispose() {
@@ -39,8 +39,8 @@ class _CreateRoomDialogState extends State<CreateRoomDialog> {
 
   void _confirm() {
     final sessionMin = int.tryParse(_sessionMinCtrl.text) ?? 0;
-    final splitMin   = int.tryParse(_splitMinCtrl.text)   ?? 0;
-    final breakMin   = int.tryParse(_breakMinCtrl.text)   ?? 0;
+    final splitMin = int.tryParse(_splitMinCtrl.text) ?? 0;
+    final breakMin = int.tryParse(_breakMinCtrl.text) ?? 0;
 
     if (sessionMin <= 0 || splitMin <= 0 || breakMin <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -51,20 +51,25 @@ class _CreateRoomDialogState extends State<CreateRoomDialog> {
 
     if (splitMin > sessionMin) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Focus block cannot be longer than total session.')),
+        const SnackBar(
+          content: Text('Focus block cannot be longer than total session.'),
+        ),
       );
       return;
     }
 
     // Generate a 5-digit room code (10000–99999)
-    final roomId = (10000 + DateTime.now().millisecondsSinceEpoch % 90000).toString();
+    final roomId = (10000 + DateTime.now().millisecondsSinceEpoch % 90000)
+        .toString();
 
-    Navigator.of(context).pop(CreateRoomResult(
-      roomId: roomId,
-      sessionMinutes: sessionMin,
-      splitMinutes: splitMin,
-      breakMinutes: breakMin,
-    ));
+    Navigator.of(context).pop(
+      CreateRoomResult(
+        roomId: roomId,
+        sessionMinutes: sessionMin,
+        splitMinutes: splitMin,
+        breakMinutes: breakMin,
+      ),
+    );
   }
 
   Widget _buildField(String label, TextEditingController ctrl, String hint) {
@@ -87,7 +92,10 @@ class _CreateRoomDialogState extends State<CreateRoomDialog> {
                 isDense: true,
                 border: const OutlineInputBorder(),
                 suffixText: 'min',
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 10,
+                ),
               ),
             ),
           ),
@@ -104,8 +112,8 @@ class _CreateRoomDialogState extends State<CreateRoomDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           _buildField('Total session length', _sessionMinCtrl, '120'),
-          _buildField('Focus block length',   _splitMinCtrl,   '25'),
-          _buildField('Break length',          _breakMinCtrl,   '5'),
+          _buildField('Focus block length', _splitMinCtrl, '25'),
+          _buildField('Break length', _breakMinCtrl, '5'),
           const SizedBox(height: 8),
           const Text(
             'Number of splits is calculated automatically.',
@@ -118,10 +126,7 @@ class _CreateRoomDialogState extends State<CreateRoomDialog> {
           onPressed: () => Navigator.of(context).pop(null),
           child: const Text('Cancel'),
         ),
-        ElevatedButton(
-          onPressed: _confirm,
-          child: const Text('Create Room'),
-        ),
+        ElevatedButton(onPressed: _confirm, child: const Text('Create Room')),
       ],
     );
   }

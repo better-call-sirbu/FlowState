@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../blocs/timer_bloc.dart';
 import '../services/websocket_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class StudyRoomScreen extends StatefulWidget {
   final WebSocketService ws;
@@ -25,18 +27,15 @@ class StudyRoomScreen extends StatefulWidget {
 }
 
 class _StudyRoomScreenState extends State<StudyRoomScreen> {
-  // Task list
   final List<String> _tasks = [];
   final TextEditingController _taskController = TextEditingController();
 
-  // Presence: userId → { displayName, isReady, isHost, phase }
-  // phase: 'waiting' | 'study' | 'break'
   Map<String, Map<String, dynamic>> _users = {};
 
   // Room state
-  String _roomState = 'waiting'; // 'waiting' | 'active' | 'ended'
-  bool _isReady = false;         // this member's own ready state
-  bool _isPausedByUser = false;  // user pressed pause → show as "On Break" locally
+  String _roomState = 'waiting';
+  bool _isReady = false;
+  bool _isPausedByUser = false;
 
   late StreamSubscription<FlowStateMessage> _wsSub;
   late TimerBloc _timerBloc;
@@ -50,7 +49,6 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
 
   @override
   void dispose() {
-    // Tell the server we're leaving
     widget.ws.leaveRoom(roomId: widget.roomId, userId: widget.userId);
     _wsSub.cancel();
     _timerBloc.close();
@@ -59,12 +57,30 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
     super.dispose();
   }
 
-  // ─── WebSocket message handler ─────────────────────────────────────────────
+  Future<void> _saveStudyTime(int secondsEarned) async {
+    if (secondsEarned <= 0) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final userDoc = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid);
+
+      await userDoc.set({
+        'totalStudySeconds': FieldValue.increment(secondsEarned),
+        'displayName': user.displayName ?? widget.displayName,
+      }, SetOptions(merge: true));
+
+      print(' Saved $secondsEarned seconds to Firebase!');
+    } catch (e) {
+      print(' Error saving study time: $e');
+    }
+  }
 
   void _onMessage(FlowStateMessage msg) {
     switch (msg.type) {
-
-      // Full room snapshot: update the whole presence table
       case MessageType.roomSnapshot:
         final usersMap = msg.payload['users'] as Map<String, dynamic>? ?? {};
         setState(() {
@@ -73,21 +89,19 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
             final d = data as Map<String, dynamic>;
             return MapEntry(uid, {
               'displayName': d['display_name'],
-              'isReady':     d['is_ready'],
-              'isHost':      d['is_host'],
-              'phase':       _roomState == 'active' ? 'study' : 'waiting',
+              'isReady': d['is_ready'],
+              'isHost': d['is_host'],
+              'phase': _roomState == 'active' ? 'study' : 'waiting',
             });
           });
-          // Keep our own ready state in sync
           _isReady = _users[widget.userId]?['isReady'] as bool? ?? _isReady;
         });
         break;
 
-      // Session kicked off by host
       case MessageType.sessionStarted:
         final config = msg.payload['session_config'] as Map<String, dynamic>;
-        final splitMinutes  = config['split_minutes']  as int;
-        final breakMinutes  = config['break_minutes']  as int;
+        final splitMinutes = config['split_minutes'] as int;
+        final breakMinutes = config['break_minutes'] as int;
         final sessionMinutes = config['session_minutes'] as int;
 
         setState(() {
@@ -97,21 +111,19 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
           }
         });
 
-        // Drive the local BLoC timer from server config
-        _timerBloc.add(StartSession(
-          totalStudySeconds: sessionMinutes * 60,
-          sessionSeconds:    splitMinutes  * 60,
-          breakSeconds:      breakMinutes  * 60,
-        ));
+        _timerBloc.add(
+          StartSession(
+            totalStudySeconds: sessionMinutes * 60,
+            sessionSeconds: splitMinutes * 60,
+            breakSeconds: breakMinutes * 60,
+          ),
+        );
         break;
 
-      // Study ↔ break phase change
       case MessageType.phaseChange:
-        final phase = msg.payload['phase'] as String; // 'study' | 'break'
+        final phase = msg.payload['phase'] as String;
         setState(() {
           for (final entry in _users.entries) {
-            // If this is the local user and they manually paused,
-            // keep them on "On Break" regardless of the server phase.
             if (entry.key == widget.userId && _isPausedByUser) {
               entry.value['phase'] = 'break';
             } else {
@@ -121,31 +133,34 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
         });
         break;
 
-      // Session over
       case MessageType.sessionEnded:
         setState(() => _roomState = 'ended');
+
+        final studyTimeMap =
+            msg.payload['study_time_per_user'] as Map<String, dynamic>? ?? {};
+        final myEarnedSeconds = studyTimeMap[widget.userId] as int? ?? 0;
+        _saveStudyTime(myEarnedSeconds);
         break;
 
-      // Someone new joined
       case MessageType.userJoined:
-        // The server also broadcasts a full snapshot on join,
-        // so roomSnapshot will handle the table update.
         break;
 
-      // Someone left — remove from presence table
       case MessageType.userLeft:
         final uid = msg.payload['user_id'] as String?;
         if (uid != null) {
           setState(() => _users.remove(uid));
+
+          if (uid == widget.userId) {
+            final myEarnedSeconds =
+                msg.payload['study_seconds_earned'] as int? ?? 0;
+            _saveStudyTime(myEarnedSeconds);
+          }
         }
         break;
 
-      // Ready state toggled
       case MessageType.readyUpdate:
-        // roomSnapshot follows immediately, no extra action needed
         break;
 
-      // Host reassigned
       case MessageType.hostChanged:
         final newHostId = msg.payload['new_host_id'] as String?;
         if (newHostId != null) {
@@ -157,12 +172,10 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
         }
         break;
 
-      // Someone toggled their personal break — update their dot for everyone
       case MessageType.personalBreakUpdate:
         final uid = msg.payload['user_id'] as String?;
         final onBreak = msg.payload['on_personal_break'] as bool? ?? false;
         if (uid != null && uid != widget.userId) {
-          // Only update others — our own dot is already handled locally
           setState(() {
             if (_users.containsKey(uid)) {
               _users[uid]!['phase'] = onBreak ? 'break' : 'study';
@@ -175,14 +188,15 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
         final errMsg = msg.payload['message'] as String? ?? 'Unknown error';
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Server: $errMsg'), backgroundColor: Colors.redAccent),
+            SnackBar(
+              content: Text('Server: $errMsg'),
+              backgroundColor: Colors.redAccent,
+            ),
           );
         }
         break;
     }
   }
-
-  // ─── Task helpers ──────────────────────────────────────────────────────────
 
   void _addTask(String task) {
     if (task.trim().isNotEmpty) {
@@ -195,16 +209,12 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
     setState(() => _tasks.removeAt(index));
   }
 
-  // ─── Formatting ────────────────────────────────────────────────────────────
-
   String _formatTime(int totalSeconds) {
     final h = (totalSeconds ~/ 3600).toString().padLeft(2, '0');
     final m = ((totalSeconds % 3600) ~/ 60).toString().padLeft(2, '0');
     final s = (totalSeconds % 60).toString().padLeft(2, '0');
     return h == '00' ? '$m:$s' : '$h:$m:$s';
   }
-
-  // ─── Presence tracker ──────────────────────────────────────────────────────
 
   Widget _buildPresenceTracker() {
     return Container(
@@ -219,55 +229,71 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
             padding: EdgeInsets.all(16.0),
             child: Text(
               "Who's Here",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.grey),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey,
+              ),
             ),
           ),
           Expanded(
             child: _users.isEmpty
-                ? const Center(child: Text('No users yet...', style: TextStyle(color: Colors.grey)))
+                ? const Center(
+                    child: Text(
+                      'No users yet...',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
                 : ListView(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     children: _users.entries.map((entry) {
-                      final uid  = entry.key;
+                      final uid = entry.key;
                       final data = entry.value;
-                      final name        = data['displayName'] as String? ?? uid;
-                      final isThisUser  = uid == widget.userId;
-                      final isUserHost  = data['isHost'] as bool? ?? false;
-                      final isReady     = data['isReady'] as bool? ?? false;
-                      final phase       = data['phase'] as String? ?? 'waiting';
+                      final name = data['displayName'] as String? ?? uid;
+                      final isThisUser = uid == widget.userId;
+                      final isUserHost = data['isHost'] as bool? ?? false;
+                      final isReady = data['isReady'] as bool? ?? false;
+                      final phase = data['phase'] as String? ?? 'waiting';
 
-                      // Status label & dot color
                       Color dotColor;
                       String statusLabel;
 
                       if (_roomState == 'waiting') {
                         if (isUserHost) {
-                          dotColor    = Colors.blueAccent;
+                          dotColor = Colors.blueAccent;
                           statusLabel = 'Host';
                         } else if (isReady) {
-                          dotColor    = Colors.greenAccent;
+                          dotColor = Colors.greenAccent;
                           statusLabel = 'Ready';
                         } else {
-                          dotColor    = Colors.grey;
+                          dotColor = Colors.grey;
                           statusLabel = 'Not ready';
                         }
                       } else {
                         if (phase == 'study') {
-                          dotColor    = Colors.greenAccent;
+                          dotColor = Colors.greenAccent;
                           statusLabel = 'Studying';
                         } else if (phase == 'break') {
-                          dotColor    = Colors.amber;
+                          dotColor = Colors.amber;
                           statusLabel = 'On Break';
                         } else {
-                          dotColor    = Colors.grey;
+                          dotColor = Colors.grey;
                           statusLabel = 'Idle';
                         }
                       }
 
                       return ListTile(
-                        leading: CircleAvatar(backgroundColor: dotColor, radius: 6),
-                        title: Text('$name${isThisUser ? ' (You)' : ''}${isUserHost ? ' 👑' : ''}'),
-                        trailing: Text(statusLabel, style: TextStyle(color: dotColor)),
+                        leading: CircleAvatar(
+                          backgroundColor: dotColor,
+                          radius: 6,
+                        ),
+                        title: Text(
+                          '$name${isThisUser ? ' (You)' : ''}${isUserHost ? ' 👑' : ''}',
+                        ),
+                        trailing: Text(
+                          statusLabel,
+                          style: TextStyle(color: dotColor),
+                        ),
                       );
                     }).toList(),
                   ),
@@ -277,9 +303,6 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
     );
   }
 
-  // ─── Waiting room bottom bar ───────────────────────────────────────────────
-
-  /// Shown below the task list while in the waiting state.
   Widget _buildWaitingActions() {
     if (_roomState != 'waiting') return const SizedBox.shrink();
 
@@ -297,7 +320,10 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
             minimumSize: const Size(double.infinity, 50),
             backgroundColor: Colors.blueAccent,
           ),
-          child: const Text('START SESSION', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+          child: const Text(
+            'START SESSION',
+            style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5),
+          ),
         ),
       );
     } else {
@@ -315,41 +341,46 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
           ),
           child: Text(
             _isReady ? 'WAITING FOR HOST...' : 'READY',
-            style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5),
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
           ),
         ),
       );
     }
   }
 
-  // ─── Timer UI (unchanged from the BLoC guy's work) ────────────────────────
-
   Widget _buildActiveTimerUI(TimerState state) {
     if (state is TimerComplete) {
       return const Center(
         child: Text(
-          'SESSION COMPLETE! 🎉',
-          style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.greenAccent),
+          'SESSION COMPLETE!',
+          style: TextStyle(
+            fontSize: 32,
+            fontWeight: FontWeight.bold,
+            color: Colors.greenAccent,
+          ),
         ),
       );
     }
 
     int currentDuration = 0;
-    int accumulated     = 0;
-    int totalTarget     = 1;
-    bool isBreak        = false;
-    bool isPaused       = state is TimerPaused;
+    int accumulated = 0;
+    int totalTarget = 1;
+    bool isBreak = false;
+    bool isPaused = state is TimerPaused;
 
     if (state is TimerActive) {
       currentDuration = state.currentDuration;
-      accumulated     = state.accumulatedStudy;
-      totalTarget     = state.totalStudyTarget;
-      isBreak         = state.isBreak;
+      accumulated = state.accumulatedStudy;
+      totalTarget = state.totalStudyTarget;
+      isBreak = state.isBreak;
     } else if (state is TimerPaused) {
       currentDuration = state.currentDuration;
-      accumulated     = state.accumulatedStudy;
-      totalTarget     = state.totalStudyTarget;
-      isBreak         = state.isBreak;
+      accumulated = state.accumulatedStudy;
+      totalTarget = state.totalStudyTarget;
+      isBreak = state.isBreak;
     }
 
     double progress = totalTarget > 0 ? (accumulated / totalTarget) : 0;
@@ -358,7 +389,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Text(
-          isBreak ? '☕ BREAK TIME' : '🧠 FOCUSING',
+          isBreak ? 'BREAK TIME' : 'FOCUSING',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w800,
@@ -386,13 +417,18 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
                   value: progress,
                   minHeight: 8,
                   backgroundColor: Colors.white12,
-                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+                  valueColor: const AlwaysStoppedAnimation<Color>(
+                    Colors.greenAccent,
+                  ),
                 ),
               ),
               const SizedBox(height: 12),
               Text(
                 'Total Progress: ${_formatTime(accumulated)} / ${_formatTime(totalTarget)}',
-                style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.w500),
+                style: const TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ],
           ),
@@ -401,7 +437,10 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
         FloatingActionButton(
           onPressed: () {
             if (_isPausedByUser) {
-              widget.ws.personalBreakEnd(roomId: widget.roomId, userId: widget.userId);
+              widget.ws.personalBreakEnd(
+                roomId: widget.roomId,
+                userId: widget.userId,
+              );
               setState(() {
                 _isPausedByUser = false;
                 if (_users.containsKey(widget.userId)) {
@@ -409,11 +448,16 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
                   final s = _timerBloc.state;
                   if (s is TimerActive) roomIsOnBreak = s.isBreak;
                   if (s is TimerPaused) roomIsOnBreak = s.isBreak;
-                  _users[widget.userId]!['phase'] = roomIsOnBreak ? 'break' : 'study';
+                  _users[widget.userId]!['phase'] = roomIsOnBreak
+                      ? 'break'
+                      : 'study';
                 }
               });
             } else {
-              widget.ws.personalBreakStart(roomId: widget.roomId, userId: widget.userId);
+              widget.ws.personalBreakStart(
+                roomId: widget.roomId,
+                userId: widget.userId,
+              );
               setState(() {
                 _isPausedByUser = true;
                 if (_users.containsKey(widget.userId)) {
@@ -423,13 +467,15 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
             }
           },
           backgroundColor: _isPausedByUser ? Colors.greenAccent : Colors.white,
-          child: Icon(_isPausedByUser ? Icons.play_arrow : Icons.pause, color: Colors.black, size: 32),
+          child: Icon(
+            _isPausedByUser ? Icons.play_arrow : Icons.pause,
+            color: Colors.black,
+            size: 32,
+          ),
         ),
       ],
     );
   }
-
-  // ─── Waiting room timer placeholder ───────────────────────────────────────
 
   Widget _buildWaitingTimerPlaceholder() {
     return Column(
@@ -454,8 +500,6 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
     );
   }
 
-  // ─── Build ─────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return BlocProvider.value(
@@ -464,7 +508,6 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
         canPop: false,
         onPopInvokedWithResult: (didPop, result) async {
           if (didPop) return;
-          // Only warn if session is active
           if (_roomState == 'active') {
             final confirm = await showDialog<bool>(
               context: context,
@@ -479,9 +522,14 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
                     child: const Text('Stay'),
                   ),
                   ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                    ),
                     onPressed: () => Navigator.of(context).pop(true),
-                    child: const Text('Leave', style: TextStyle(color: Colors.white)),
+                    child: const Text(
+                      'Leave',
+                      style: TextStyle(color: Colors.white),
+                    ),
                   ),
                 ],
               ),
@@ -494,91 +542,100 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
           }
         },
         child: Scaffold(
-        appBar: AppBar(
-          title: Text('FlowState — Room #${widget.roomId}'),
-          centerTitle: true,
-          elevation: 0,
-        ),
-        body: Column(
-          children: [
-            // Top half: task list + timer
-            Expanded(
-              flex: 3,
-              child: Row(
-                children: [
-                  // Task list (left panel)
-                  Expanded(
-                    flex: 1,
-                    child: Container(
-                      padding: const EdgeInsets.all(16.0),
-                      decoration: const BoxDecoration(
-                        border: Border(right: BorderSide(color: Colors.white12)),
-                      ),
-                      child: Column(
-                        children: [
-                          const Text(
-                            'Session Tasks',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.grey),
+          appBar: AppBar(
+            title: Text('FlowState — Room #${widget.roomId}'),
+            centerTitle: true,
+            elevation: 0,
+          ),
+          body: Column(
+            children: [
+              Expanded(
+                flex: 3,
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 1,
+                      child: Container(
+                        padding: const EdgeInsets.all(16.0),
+                        decoration: const BoxDecoration(
+                          border: Border(
+                            right: BorderSide(color: Colors.white12),
                           ),
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: _taskController,
-                                  decoration: const InputDecoration(hintText: 'Add a task...', isDense: true),
-                                  onSubmitted: _addTask,
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.add_circle, color: Colors.greenAccent),
-                                onPressed: () => _addTask(_taskController.text),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          Expanded(
-                            child: ListView.builder(
-                              itemCount: _tasks.length,
-                              itemBuilder: (context, index) => ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.radio_button_unchecked, color: Colors.grey, size: 20),
-                                title: Text(_tasks[index]),
-                                onTap: () => _removeTask(index),
+                        ),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'Session Tasks',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey,
                               ),
                             ),
-                          ),
-                          // Ready / Start button sits at the bottom of the task panel
-                          _buildWaitingActions(),
-                        ],
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _taskController,
+                                    decoration: const InputDecoration(
+                                      hintText: 'Add a task...',
+                                      isDense: true,
+                                    ),
+                                    onSubmitted: _addTask,
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.add_circle,
+                                    color: Colors.greenAccent,
+                                  ),
+                                  onPressed: () =>
+                                      _addTask(_taskController.text),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Expanded(
+                              child: ListView.builder(
+                                itemCount: _tasks.length,
+                                itemBuilder: (context, index) => ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(
+                                    Icons.radio_button_unchecked,
+                                    color: Colors.grey,
+                                    size: 20,
+                                  ),
+                                  title: Text(_tasks[index]),
+                                  onTap: () => _removeTask(index),
+                                ),
+                              ),
+                            ),
+                            _buildWaitingActions(),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
 
-                  // Timer (right panel)
-                  Expanded(
-                    flex: 2,
-                    child: BlocBuilder<TimerBloc, TimerState>(
-                      builder: (context, state) {
-                        if (_roomState == 'waiting') {
-                          return _buildWaitingTimerPlaceholder();
-                        }
-                        return _buildActiveTimerUI(state);
-                      },
+                    Expanded(
+                      flex: 2,
+                      child: BlocBuilder<TimerBloc, TimerState>(
+                        builder: (context, state) {
+                          if (_roomState == 'waiting') {
+                            return _buildWaitingTimerPlaceholder();
+                          }
+                          return _buildActiveTimerUI(state);
+                        },
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
 
-            // Bottom half: presence tracker
-            Expanded(
-              flex: 2,
-              child: _buildPresenceTracker(),
-            ),
-          ],
+              Expanded(flex: 2, child: _buildPresenceTracker()),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }

@@ -66,7 +66,6 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
-          // Allows scrolling if keyboard pops up
           padding: const EdgeInsets.all(32.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -96,7 +95,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 16),
               ],
 
-              // Email Field
               TextField(
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
@@ -110,10 +108,9 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Password Field
               TextField(
                 controller: _passwordController,
-                obscureText: true, // Hides the password dots
+                obscureText: true,
                 decoration: InputDecoration(
                   labelText: 'Password',
                   border: OutlineInputBorder(
@@ -124,7 +121,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 24),
 
-              // Submit Button
               SizedBox(
                 width: double.infinity,
                 height: 50,
@@ -145,7 +141,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Switch between Login and Register
               TextButton(
                 onPressed: () {
                   setState(() {
