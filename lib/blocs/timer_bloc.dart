@@ -1,111 +1,169 @@
 import 'dart:async';
-import 'package:bloc/bloc.dart';
-import 'package:equatable/equatable.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-// Buttons
-abstract class TimerEvent extends Equatable {
-  const TimerEvent();
+// Timer
+abstract class TimerEvent {}
 
-  @override
-  List<Object> get props => [];
+class StartSession extends TimerEvent {
+  final int totalStudySeconds;
+  final int sessionSeconds;
+  final int breakSeconds;
+
+  StartSession({
+    required this.totalStudySeconds,
+    required this.sessionSeconds,
+    required this.breakSeconds,
+  });
 }
 
-class StartFocusTimer extends TimerEvent {}
 class PauseTimer extends TimerEvent {}
 class ResumeTimer extends TimerEvent {}
-class StartBreakTimer extends TimerEvent {}
-class TimerTicked extends TimerEvent {
-  final int duration;
-  const TimerTicked({required this.duration});
+class _TimerTicked extends TimerEvent {}
 
-  @override
-  List<Object> get props => [duration];
-}
+// UI
+abstract class TimerState {}
 
-// States
-abstract class TimerState extends Equatable {
-  final int duration; // Seconds remaining
-  const TimerState(this.duration);
+class TimerInitial extends TimerState {} // Shows the setup screen
 
-  @override
-  List<Object> get props => [duration];
-}
+class TimerActive extends TimerState {
+  final int currentDuration;    // What shows on the massive clock
+  final int accumulatedStudy;   // How much focus time is done
+  final int totalStudyTarget;   // The master goal
+  final bool isBreak;           // True if resting, False if grinding
 
-class TimerInitial extends TimerState {
-  const TimerInitial(super.duration); 
-}
-class TimerFocusInProgress extends TimerState {
-  const TimerFocusInProgress(super.duration);
-}
-class TimerFocusPaused extends TimerState {
-  const TimerFocusPaused(super.duration);
-}
-class TimerBreakInProgress extends TimerState {
-  const TimerBreakInProgress(super.duration); 
+  TimerActive({
+    required this.currentDuration,
+    required this.accumulatedStudy,
+    required this.totalStudyTarget,
+    required this.isBreak,
+  });
 }
 
-// BLOC
+class TimerPaused extends TimerState {
+  final int currentDuration;
+  final int accumulatedStudy;
+  final int totalStudyTarget;
+  final bool isBreak;
+
+  TimerPaused({
+    required this.currentDuration,
+    required this.accumulatedStudy,
+    required this.totalStudyTarget,
+    required this.isBreak,
+  });
+}
+
+class TimerComplete extends TimerState {} // The "You Did It" screen
+
 class TimerBloc extends Bloc<TimerEvent, TimerState> {
-  static const int focusDuration = 1500; 
-  static const int breakDuration = 300;  
-  
   StreamSubscription<int>? _tickerSubscription;
+  
+  // The Settings
+  int _totalStudySeconds = 0;
+  int _sessionSeconds = 0;
+  int _breakSeconds = 0;
+  
+  // The Live Trackers
+  int _currentDuration = 0;
+  int _accumulatedStudy = 0;
+  bool _isBreak = false;
 
-  TimerBloc() : super(const TimerInitial(focusDuration)) {
-    on<StartFocusTimer>(_onStartFocus);
-    on<PauseTimer>(_onPause);
-    on<ResumeTimer>(_onResume);
-    on<StartBreakTimer>(_onStartBreak);
-    on<TimerTicked>(_onTicked);
+  TimerBloc() : super(TimerInitial()) {
+    on<StartSession>(_onStartSession);
+    on<PauseTimer>(_onPauseTimer);
+    on<ResumeTimer>(_onResumeTimer);
+    on<_TimerTicked>(_onTicked);
   }
 
-  void _onStartFocus(StartFocusTimer event, Emitter<TimerState> emit) {
-    emit(const TimerFocusInProgress(focusDuration));
-    _startTicker(focusDuration);
-  }
-
-  void _onStartBreak(StartBreakTimer event, Emitter<TimerState> emit) {
-    emit(const TimerBreakInProgress(breakDuration));
-    _startTicker(breakDuration);
-  }
-
-  void _onPause(PauseTimer event, Emitter<TimerState> emit) {
-    if (state is TimerFocusInProgress) {
-      _tickerSubscription?.pause(); 
-      emit(TimerFocusPaused(state.duration));
-    }
-  }
-
-  void _onResume(ResumeTimer event, Emitter<TimerState> emit) {
-    if (state is TimerFocusPaused) {
-      _tickerSubscription?.resume();
-      emit(TimerFocusInProgress(state.duration));
-    }
-  }
-
-  void _onTicked(TimerTicked event, Emitter<TimerState> emit) {
-    if (event.duration > 0) {
-      if (state is TimerFocusInProgress) {
-        emit(TimerFocusInProgress(event.duration));
-      } else if (state is TimerBreakInProgress) {
-        emit(TimerBreakInProgress(event.duration));
-      }
+  void _onStartSession(StartSession event, Emitter<TimerState> emit) {
+    _totalStudySeconds = event.totalStudySeconds;
+    
+    // Focus higher than total work case
+    if (event.sessionSeconds > _totalStudySeconds) {
+      _sessionSeconds = _totalStudySeconds;
     } else {
-      _tickerSubscription?.cancel();
-      emit(const TimerInitial(focusDuration)); 
+      _sessionSeconds = event.sessionSeconds;
+    }
+    
+    _breakSeconds = event.breakSeconds;
+    
+    _currentDuration = _sessionSeconds;
+    _accumulatedStudy = 0;
+    _isBreak = false;
+
+    _startTicker();
+    emit(_createActiveState());
+  }
+
+  void _onPauseTimer(PauseTimer event, Emitter<TimerState> emit) {
+    _tickerSubscription?.pause();
+    emit(TimerPaused(
+      currentDuration: _currentDuration,
+      accumulatedStudy: _accumulatedStudy,
+      totalStudyTarget: _totalStudySeconds,
+      isBreak: _isBreak,
+    ));
+  }
+
+  void _onResumeTimer(ResumeTimer event, Emitter<TimerState> emit) {
+    _tickerSubscription?.resume();
+    emit(_createActiveState());
+  }
+
+  void _onTicked(_TimerTicked event, Emitter<TimerState> emit) {
+    if (_currentDuration > 0) {
+      _currentDuration--;
+      
+      // Ignore brake time towards total work time
+      if (!_isBreak) {
+        _accumulatedStudy++;
+      }
+      emit(_createActiveState());
+    } else {
+      // Phase switch
+      if (!_isBreak) {
+        // One focus session finished
+        if (_accumulatedStudy >= _totalStudySeconds) {
+          _tickerSubscription?.cancel();
+          emit(TimerComplete()); // Session compleated
+        } else {
+          // Brake Start
+          _isBreak = true;
+          _currentDuration = _breakSeconds;
+          emit(_createActiveState());
+        }
+      } else {
+        // Brake end
+        _isBreak = false;
+        
+        // Safety check: final session isn't longer than the time left
+        int remainingStudy = _totalStudySeconds - _accumulatedStudy;
+        _currentDuration = (remainingStudy < _sessionSeconds) ? remainingStudy : _sessionSeconds;
+        
+        emit(_createActiveState());
+      }
     }
   }
 
-  void _startTicker(int duration) {
+  void _startTicker() {
     _tickerSubscription?.cancel();
-    _tickerSubscription = Stream.periodic(const Duration(seconds: 1), (x) => duration - x - 1)
-        .take(duration)
-        .listen((timeLeft) => add(TimerTicked(duration: timeLeft)));
+    _tickerSubscription = Stream.periodic(const Duration(seconds: 1), (x) => x).listen((_) {
+      add(_TimerTicked());
+    });
+  }
+
+  TimerActive _createActiveState() {
+    return TimerActive(
+      currentDuration: _currentDuration,
+      accumulatedStudy: _accumulatedStudy,
+      totalStudyTarget: _totalStudySeconds,
+      isBreak: _isBreak,
+    );
   }
 
   @override
   Future<void> close() {
-    _tickerSubscription?.cancel(); 
+    _tickerSubscription?.cancel();
     return super.close();
   }
 }
