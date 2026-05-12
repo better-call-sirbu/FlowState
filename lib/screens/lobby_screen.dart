@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'login_screen.dart';
+import 'room_screen.dart'; // <-- I added your screen here!
 
 class LobbyScreen extends StatelessWidget {
   const LobbyScreen({super.key});
@@ -60,7 +61,7 @@ class LobbyScreen extends StatelessWidget {
               ),
               const SizedBox(height: 50),
 
-              // HOST BUTTON
+              // HOST BUTTON (Now wired to your Study Room!)
               ElevatedButton.icon(
                 icon: const Icon(Icons.add_box, size: 28),
                 label: const Text(
@@ -76,10 +77,10 @@ class LobbyScreen extends StatelessWidget {
                   ),
                 ),
                 onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Host Room logic coming soon! 🚀'),
-                    ),
+                  // <-- THIS NAVIGATES TO YOUR CODE -->
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const StudyRoomScreen()),
                   );
                 },
               ),
