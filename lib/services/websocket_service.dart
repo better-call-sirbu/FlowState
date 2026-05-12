@@ -16,6 +16,7 @@ enum MessageType {
   userLeft,
   readyUpdate,
   hostChanged,
+  personalBreakUpdate,
   error,
 }
 
@@ -32,15 +33,16 @@ class FlowStateMessage {
   factory FlowStateMessage.fromJson(Map<String, dynamic> json) {
     final typeStr = json['type'] as String;
     const typeMap = {
-      'room_snapshot':   MessageType.roomSnapshot,
-      'session_started': MessageType.sessionStarted,
-      'phase_change':    MessageType.phaseChange,
-      'session_ended':   MessageType.sessionEnded,
-      'user_joined':     MessageType.userJoined,
-      'user_left':       MessageType.userLeft,
-      'ready_update':    MessageType.readyUpdate,
-      'host_changed':    MessageType.hostChanged,
-      'error':           MessageType.error,
+      'room_snapshot':         MessageType.roomSnapshot,
+      'session_started':       MessageType.sessionStarted,
+      'phase_change':          MessageType.phaseChange,
+      'session_ended':         MessageType.sessionEnded,
+      'user_joined':           MessageType.userJoined,
+      'user_left':             MessageType.userLeft,
+      'ready_update':          MessageType.readyUpdate,
+      'host_changed':          MessageType.hostChanged,
+      'personal_break_update': MessageType.personalBreakUpdate,
+      'error':                 MessageType.error,
     };
 
     return FlowStateMessage(

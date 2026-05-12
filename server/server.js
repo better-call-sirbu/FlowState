@@ -335,12 +335,17 @@ function handlePersonalBreakStart(ws, msg) {
   const user = room.users.get(user_id);
   if (!user) return;
 
-  // Only start the penalty timer if we're in a study phase.
-  // During a scheduled break, personal pause has no cost.
   if (room.currentPhase === "study" && !user.personalBreakStartedAt) {
     user.personalBreakStartedAt = new Date();
     console.log(`${user.displayName} started personal break in room ${room_id}.`);
   }
+
+  // Notify everyone so their presence tracker updates
+  broadcastToRoom(room_id, {
+    type: "personal_break_update",
+    user_id,
+    on_personal_break: true,
+  });
 }
 
 function handlePersonalBreakEnd(ws, msg) {
@@ -351,10 +356,16 @@ function handlePersonalBreakEnd(ws, msg) {
   const user = room.users.get(user_id);
   if (!user) return;
 
-  // Flush whatever penalty was accumulated and stop the timer.
   flushPersonalBreak(user);
   user.personalBreakPausedForScheduledBreak = false;
   console.log(`${user.displayName} ended personal break. Total penalty: ${user.personalBreakSeconds}s`);
+
+  // Notify everyone so their presence tracker updates
+  broadcastToRoom(room_id, {
+    type: "personal_break_update",
+    user_id,
+    on_personal_break: false,
+  });
 }
 
 function handleLeaveRoom(ws, msg) {

@@ -157,6 +157,20 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
         }
         break;
 
+      // Someone toggled their personal break — update their dot for everyone
+      case MessageType.personalBreakUpdate:
+        final uid = msg.payload['user_id'] as String?;
+        final onBreak = msg.payload['on_personal_break'] as bool? ?? false;
+        if (uid != null && uid != widget.userId) {
+          // Only update others — our own dot is already handled locally
+          setState(() {
+            if (_users.containsKey(uid)) {
+              _users[uid]!['phase'] = onBreak ? 'break' : 'study';
+            }
+          });
+        }
+        break;
+
       case MessageType.error:
         final errMsg = msg.payload['message'] as String? ?? 'Unknown error';
         if (mounted) {
@@ -386,8 +400,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
         const SizedBox(height: 40),
         FloatingActionButton(
           onPressed: () {
-            if (isPaused) {
-              _timerBloc.add(ResumeTimer());
+            if (_isPausedByUser) {
               widget.ws.personalBreakEnd(roomId: widget.roomId, userId: widget.userId);
               setState(() {
                 _isPausedByUser = false;
@@ -396,7 +409,6 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
                 }
               });
             } else {
-              _timerBloc.add(PauseTimer());
               widget.ws.personalBreakStart(roomId: widget.roomId, userId: widget.userId);
               setState(() {
                 _isPausedByUser = true;
@@ -406,8 +418,8 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
               });
             }
           },
-          backgroundColor: isPaused ? Colors.greenAccent : Colors.white,
-          child: Icon(isPaused ? Icons.play_arrow : Icons.pause, color: Colors.black, size: 32),
+          backgroundColor: _isPausedByUser ? Colors.greenAccent : Colors.white,
+          child: Icon(_isPausedByUser ? Icons.play_arrow : Icons.pause, color: Colors.black, size: 32),
         ),
       ],
     );
