@@ -405,7 +405,11 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
               setState(() {
                 _isPausedByUser = false;
                 if (_users.containsKey(widget.userId)) {
-                  _users[widget.userId]!['phase'] = 'study';
+                  bool roomIsOnBreak = false;
+                  final s = _timerBloc.state;
+                  if (s is TimerActive) roomIsOnBreak = s.isBreak;
+                  if (s is TimerPaused) roomIsOnBreak = s.isBreak;
+                  _users[widget.userId]!['phase'] = roomIsOnBreak ? 'break' : 'study';
                 }
               });
             } else {
