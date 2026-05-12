@@ -243,15 +243,8 @@ function handleJoinRoom(ws, msg) {
 
   console.log(`${display_name} joined room ${room_id}.`);
 
-  broadcastToRoom(room_id, {
-    type: "user_joined",
-    room_id,
-    user_id,
-    display_name,
-  });
-
-  // Send full snapshot to the new joiner
-  sendToUser(ws, getRoomSnapshot(room));
+  // Broadcast full snapshot to everyone so all tabs stay in sync
+  broadcastToRoom(room_id, getRoomSnapshot(room));
 }
 
 function handleSetReady(ws, msg) {
@@ -259,21 +252,16 @@ function handleSetReady(ws, msg) {
   const room = rooms.get(room_id);
 
   if (!room || room.state !== "waiting") return;
-  if (user_id === room.hostId) return; // host can't press ready
+  if (user_id === room.hostId) return; // host is always ready, can't toggle
 
   const user = room.users.get(user_id);
   if (!user) return;
 
-  user.isReady = true;
+  // Toggle ready state
+  user.isReady = !user.isReady;
 
-  broadcastToRoom(room_id, {
-    type: "ready_update",
-    room_id,
-    user_id,
-    ready_users: [...room.users.entries()]
-      .filter(([uid, u]) => u.isReady || uid === room.hostId)
-      .map(([uid]) => uid),
-  });
+  // Broadcast full snapshot so everyone's room presence table updates
+  broadcastToRoom(room_id, getRoomSnapshot(room));
 }
 
 function handleStartSession(ws, msg) {
@@ -326,6 +314,7 @@ function removeUserFromRoom(roomId, userId, ws) {
   room.users.delete(userId);
   console.log(`${user.displayName} left room ${roomId}. Study seconds: ${finalStudySeconds}`);
 
+  // Notify everyone of the study seconds this user earned (for Firebase guy)
   broadcastToRoom(roomId, {
     type: "user_left",
     room_id: roomId,
@@ -333,6 +322,11 @@ function removeUserFromRoom(roomId, userId, ws) {
     display_name: user.displayName,
     study_seconds_earned: finalStudySeconds,
   });
+
+  // Also broadcast updated snapshot so remaining users' presence tables sync
+  if (room.users.size > 0) {
+    broadcastToRoom(roomId, getRoomSnapshot(room));
+  }
 
   // Clean up empty rooms
   if (room.users.size === 0) {
