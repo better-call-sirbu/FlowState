@@ -83,18 +83,12 @@ function getRoomSnapshot(room) {
 function getPhaseDurationMs(room) {
   if (!room.sessionConfig) return 0;
   const { splitMinutes, breakMinutes } = room.sessionConfig;
-  // splitMinutes=0 → treat the full sessionMinutes as one study block
-  if (room.currentPhase === "study") {
-    const mins = splitMinutes > 0 ? splitMinutes : room.sessionConfig.sessionMinutes;
-    return mins * 60 * 1000;
-  }
+  if (room.currentPhase === "study") return splitMinutes * 60 * 1000;
   if (room.currentPhase === "break") return breakMinutes * 60 * 1000;
   return 0;
 }
 
 function calcNumSplits(sessionMinutes, splitMinutes) {
-  // splitMinutes=0 means no splits — run the whole session as one block with no breaks.
-  if (!splitMinutes || splitMinutes <= 0) return 1;
   return Math.max(1, Math.floor(sessionMinutes / splitMinutes));
 }
 
@@ -159,7 +153,10 @@ function startPhase(room) {
     type: "phase_change",
     phase: room.currentPhase,
     split_index: room.currentSplitIndex,
-    duration_seconds: Math.floor(durationMs / 1000),
+    duration_seconds:
+      room.currentPhase === "study"
+        ? room.sessionConfig.splitMinutes * 60
+        : room.sessionConfig.breakMinutes * 60,
     ends_at: new Date(Date.now() + durationMs).toISOString(),
   });
 
@@ -168,8 +165,10 @@ function startPhase(room) {
 
 function onPhaseEnd(room) {
   if (room.currentPhase === "study") {
-    const splitSeconds = getPhaseDurationMs(room) / 1000; // use actual duration, not raw splitMinutes
+    const splitSeconds = room.sessionConfig.splitMinutes * 60;
     for (const [, u] of room.users) {
+      // Credit the full split, then flush any personal break penalty accumulated
+      // during this split so the penalty is locked in before the next phase.
       u.studySecondsEarned += splitSeconds;
       flushPersonalBreak(u);
     }
@@ -177,14 +176,8 @@ function onPhaseEnd(room) {
     const isLastSplit = room.currentSplitIndex >= room.sessionConfig.numSplits - 1;
     if (isLastSplit) {
       endSession(room);
-    } else if (room.sessionConfig.breakMinutes > 0) {
-      // Only enter a break phase if break length is non-zero
-      room.currentPhase = "break";
-      startPhase(room);
     } else {
-      // breakMinutes=0: skip break, go straight to next study split
-      room.currentSplitIndex += 1;
-      room.currentPhase = "study";
+      room.currentPhase = "break";
       startPhase(room);
     }
   } else {
@@ -233,15 +226,13 @@ function handleCreateRoom(ws, msg) {
   }
 
   const { session_minutes, split_minutes, break_minutes } = session_config;
-  // split_minutes=0 → one continuous block, no splits, no breaks
-  const effectiveSplitMinutes = (!split_minutes || split_minutes <= 0) ? 0 : split_minutes;
-  const numSplits = calcNumSplits(session_minutes, effectiveSplitMinutes);
+  const numSplits = calcNumSplits(session_minutes, split_minutes);
 
   const room = {
     roomId: room_id,
     hostId: host_id,
     state: "waiting",
-    sessionConfig: { sessionMinutes: session_minutes, splitMinutes: effectiveSplitMinutes, breakMinutes: break_minutes ?? 0, numSplits },
+    sessionConfig: { sessionMinutes: session_minutes, splitMinutes: split_minutes, breakMinutes: break_minutes, numSplits },
     users: new Map(),
     currentPhase: null,
     currentSplitIndex: 0,

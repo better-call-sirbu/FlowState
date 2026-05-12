@@ -37,7 +37,6 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
   String _roomState = 'waiting'; // 'waiting' | 'active' | 'ended'
   bool _isReady = false;         // this member's own ready state
   bool _isPausedByUser = false;  // user pressed pause → show as "On Break" locally
-  String _currentServerPhase = 'study'; // tracks the current scheduled phase ('study' | 'break')
 
   late StreamSubscription<FlowStateMessage> _wsSub;
   late TimerBloc _timerBloc;
@@ -110,14 +109,10 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
       case MessageType.phaseChange:
         final phase = msg.payload['phase'] as String; // 'study' | 'break'
         setState(() {
-          _currentServerPhase = phase;
           for (final entry in _users.entries) {
-            // During a scheduled break everyone is on break — no exceptions.
-            // During a study phase, keep the local user on "On Break" only if
-            // they manually paused; everyone else follows the server phase.
-            if (phase == 'break') {
-              entry.value['phase'] = 'break';
-            } else if (entry.key == widget.userId && _isPausedByUser) {
+            // If this is the local user and they manually paused,
+            // keep them on "On Break" regardless of the server phase.
+            if (entry.key == widget.userId && _isPausedByUser) {
               entry.value['phase'] = 'break';
             } else {
               entry.value['phase'] = phase;
@@ -410,10 +405,7 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
               setState(() {
                 _isPausedByUser = false;
                 if (_users.containsKey(widget.userId)) {
-                  // If a scheduled break is active, show "On Break" (scheduled),
-                  // not "Studying" — the server phase takes precedence.
-                  _users[widget.userId]!['phase'] =
-                      _currentServerPhase == 'break' ? 'break' : 'study';
+                  _users[widget.userId]!['phase'] = 'study';
                 }
               });
             } else {
