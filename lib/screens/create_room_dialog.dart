@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-/// Result returned when the host confirms the session configuration.
 class CreateRoomResult {
   final String roomId;
   final int sessionMinutes;
