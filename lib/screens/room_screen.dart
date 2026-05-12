@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:hive/hive.dart';
 import '../blocs/timer_bloc.dart';
 
 class StudyRoomScreen extends StatefulWidget {
@@ -12,9 +11,8 @@ class StudyRoomScreen extends StatefulWidget {
 
 class _StudyRoomScreenState extends State<StudyRoomScreen> {
   // To-Do list
-  List<String> _tasks = [];
+  final List<String> _tasks = [];
   final TextEditingController _taskController = TextEditingController();
-  final _taskBox = Hive.box('tasksBox'); 
 
   // Timer SetUp
   final TextEditingController _totalMinCtrl = TextEditingController(text: "120");
@@ -26,17 +24,11 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
   final TextEditingController _breakMinCtrl = TextEditingController(text: "10");
   final TextEditingController _breakSecCtrl = TextEditingController(text: "0");
 
-  @override
-  void initState() {
-    super.initState();
-    _tasks = _taskBox.get('myTasks', defaultValue: <String>[])?.cast<String>() ?? [];
-  }
 
   void _addTask(String task) {
     if (task.trim().isNotEmpty) {
       setState(() {
         _tasks.add(task.trim());
-        _taskBox.put('myTasks', _tasks); 
       });
       _taskController.clear();
     }
@@ -45,7 +37,6 @@ class _StudyRoomScreenState extends State<StudyRoomScreen> {
   void _removeTask(int index) {
     setState(() {
       _tasks.removeAt(index);
-      _taskBox.put('myTasks', _tasks); 
     });
   }
 
